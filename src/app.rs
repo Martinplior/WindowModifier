@@ -46,7 +46,7 @@ struct WindowModificationCache {
 
 pub(crate) struct App {
     window_modifier: WindowModifier,
-    current_window_info: Option<WindowInfo>,
+    current_window_info_index: Option<usize>,
     window_modification_cache: WindowModificationCache,
 }
 
@@ -67,7 +67,7 @@ impl App {
         cc.egui_ctx.set_fonts(font_definitions);
         Self {
             window_modifier: WindowModifier::new(),
-            current_window_info: None,
+            current_window_info_index: None,
             window_modification_cache: Default::default(),
         }
     }
@@ -88,13 +88,27 @@ impl eframe::App for App {
 impl App {
     pub const FONT_SIZE: f32 = 16.0;
 
-    fn update_current_window_info(&mut self) {
-        self.current_window_info
+    fn current_window_info(&self) -> Option<&WindowInfo> {
+        self.current_window_info_index
             .as_ref()
+            .map(|&index| self.window_modifier.window_info_list().get(index).unwrap())
+    }
+
+    fn current_window_info_mut(&mut self) -> Option<&mut WindowInfo> {
+        self.current_window_info_index.as_ref().map(|&index| {
+            self.window_modifier
+                .window_info_list_mut()
+                .get_mut(index)
+                .unwrap()
+        })
+    }
+
+    fn update_current_window_info(&mut self) {
+        self.current_window_info()
             .map(|window_info| !window_info.is_valid())
             .map(|is_invalid| {
                 is_invalid.then(|| {
-                    self.current_window_info = None;
+                    self.current_window_info_index = None;
                     message_dialog::info("当前窗口句柄已失效。").show();
                 })
             });
@@ -107,8 +121,7 @@ impl App {
                     egui::Label::new(egui::RichText::new("当前窗口: ").size(Self::FONT_SIZE))
                         .selectable(true)
                         .ui(ui);
-                    self.current_window_info
-                        .as_ref()
+                    self.current_window_info()
                         .map(|window_info| window_info.show_ui(ui))
                         .unwrap_or_else(|| {
                             egui::Label::new(egui::RichText::new("无").size(Self::FONT_SIZE))
@@ -124,17 +137,16 @@ impl App {
             .ui(ui)
             .clicked()
             .then(|| {
-                self.current_window_info
-                    .as_ref()
-                    .map(|window_info| !window_info.is_valid())
-                    .map(|is_invalid| is_invalid.then(|| self.current_window_info = None));
+                let pid_and_hwnd = self
+                    .current_window_info()
+                    .map(|window_info| (window_info.pid, window_info.hwnd));
                 self.window_modifier.update_window_info_list();
-                self.current_window_info.as_mut().map(|window_info| {
-                    self.window_modifier
+                pid_and_hwnd.map(|(pid, hwnd)| {
+                    self.current_window_info_index = self
+                        .window_modifier
                         .window_info_list()
                         .iter()
-                        .find(|w| w.hwnd == window_info.hwnd && w.pid == window_info.pid)
-                        .map(|w| *window_info = w.clone());
+                        .position(|window_info| window_info.pid == pid && window_info.hwnd == hwnd);
                 });
             });
         ui.separator();
@@ -147,12 +159,13 @@ impl App {
                 self.window_modifier
                     .window_info_list()
                     .iter()
+                    .enumerate()
                     .skip(range.start)
                     .take(range.end - range.start)
-                    .for_each(|window_info| {
+                    .for_each(|(index, window_info)| {
                         window_info
                             .show_selectable_ui(ui)
-                            .then(|| self.current_window_info = Some(window_info.clone()));
+                            .then(|| self.current_window_info_index = Some(index));
                     });
                 ui.add_space(10.0);
             },
@@ -166,163 +179,186 @@ impl App {
                 .num_columns(1)
                 .striped(true)
                 .show(ui, |ui| {
-                    ui.horizontal_centered(|ui| {
-                        egui::Label::new(egui::RichText::new("窗口大小: ").size(Self::FONT_SIZE))
-                            .selectable(false)
-                            .ui(ui);
-                        egui::Button::new(egui::RichText::new("读取").size(Self::FONT_SIZE))
-                            .ui(ui)
-                            .clicked()
-                            .then(|| {
-                                self.update_current_window_info();
-                                self.current_window_info.as_ref().map(|window_info| {
-                                    let _ = window_info
-                                        .get_size()
-                                        .map(|[width, height]| {
-                                            self.window_modification_cache.width = width;
-                                            self.window_modification_cache.height = height;
-                                        })
-                                        .map_err(|err| {
-                                            message_dialog::warning(&err.to_string()).show()
-                                        });
-                                })
-                            });
-                        egui::Button::new(egui::RichText::new("应用").size(Self::FONT_SIZE))
-                            .ui(ui)
-                            .clicked()
-                            .then(|| {
-                                self.update_current_window_info();
-                                self.current_window_info.as_ref().map(|window_info| {
-                                    let _ = window_info
-                                        .resize([
-                                            self.window_modification_cache.width,
-                                            self.window_modification_cache.height,
-                                        ])
-                                        .map_err(|err| {
-                                            message_dialog::warning(&err.to_string()).show()
-                                        });
-                                })
-                            });
-                        egui::Label::new(egui::RichText::new("宽度: ").size(Self::FONT_SIZE))
-                            .ui(ui);
-                        egui::Slider::new(&mut self.window_modification_cache.width, 0..=8192)
-                            .logarithmic(true)
-                            .drag_value_speed(1.0)
-                            .ui(ui);
-                        egui::Label::new(egui::RichText::new("高度: ").size(Self::FONT_SIZE))
-                            .ui(ui);
-                        egui::Slider::new(&mut self.window_modification_cache.height, 0..=8192)
-                            .logarithmic(true)
-                            .drag_value_speed(1.0)
-                            .ui(ui);
-                    });
+                    self.modify_window_size(ui);
                     ui.end_row();
-                    ui.horizontal_centered(|ui| {
-                        egui::Label::new(
-                            egui::RichText::new("窗口内部大小: ").size(Self::FONT_SIZE),
-                        )
-                        .ui(ui);
-                        egui::Button::new(egui::RichText::new("读取").size(Self::FONT_SIZE))
-                            .ui(ui)
-                            .clicked()
-                            .then(|| {
-                                self.update_current_window_info();
-                                self.current_window_info.as_ref().map(|window_info| {
-                                    let _ = window_info
-                                        .get_inner_size()
-                                        .map(|[inner_width, inner_height]| {
-                                            self.window_modification_cache.inner_width =
-                                                inner_width;
-                                            self.window_modification_cache.inner_height =
-                                                inner_height;
-                                        })
-                                        .map_err(|err| {
-                                            message_dialog::warning(&err.to_string()).show()
-                                        });
-                                })
-                            });
-                        egui::Button::new(egui::RichText::new("应用").size(Self::FONT_SIZE))
-                            .ui(ui)
-                            .clicked()
-                            .then(|| {
-                                self.update_current_window_info();
-                                self.current_window_info.as_ref().map(|window_info| {
-                                    let _ = window_info
-                                        .resize_inner([
-                                            self.window_modification_cache.inner_width,
-                                            self.window_modification_cache.inner_height,
-                                        ])
-                                        .map_err(|err| {
-                                            message_dialog::warning(&err.to_string()).show()
-                                        });
-                                })
-                            });
-                        egui::Label::new(egui::RichText::new("宽度: ").size(Self::FONT_SIZE))
-                            .ui(ui);
-                        egui::Slider::new(
-                            &mut self.window_modification_cache.inner_width,
-                            0..=8192,
-                        )
-                        .logarithmic(true)
-                        .drag_value_speed(1.0)
-                        .ui(ui);
-                        egui::Label::new(egui::RichText::new("高度: ").size(Self::FONT_SIZE))
-                            .ui(ui);
-                        egui::Slider::new(
-                            &mut self.window_modification_cache.inner_height,
-                            0..=8192,
-                        )
-                        .logarithmic(true)
-                        .drag_value_speed(1.0)
-                        .ui(ui);
-                    });
+                    self.modify_window_inner_size(ui);
                     ui.end_row();
-                    ui.horizontal_centered(|ui| {
-                        egui::Label::new(egui::RichText::new("窗口位置: ").size(Self::FONT_SIZE))
-                            .ui(ui);
-                        egui::Button::new(egui::RichText::new("读取").size(Self::FONT_SIZE))
-                            .ui(ui)
-                            .clicked()
-                            .then(|| {
-                                self.update_current_window_info();
-                                self.current_window_info.as_ref().map(|window_info| {
-                                    let _ = window_info
-                                        .get_position()
-                                        .map(|[x, y]| {
-                                            self.window_modification_cache.x = x;
-                                            self.window_modification_cache.y = y;
-                                        })
-                                        .map_err(|err| message_dialog::warning(&err.to_string()));
-                                })
-                            });
-                        egui::Button::new(egui::RichText::new("应用").size(Self::FONT_SIZE))
-                            .ui(ui)
-                            .clicked()
-                            .then(|| {
-                                self.update_current_window_info();
-                                self.current_window_info.as_ref().map(|window_info| {
-                                    let _ = window_info
-                                        .move_to([
-                                            self.window_modification_cache.x,
-                                            self.window_modification_cache.y,
-                                        ])
-                                        .map_err(|err| message_dialog::warning(&err.to_string()));
-                                })
-                            });
-                        egui::Label::new(egui::RichText::new("x: ").size(Self::FONT_SIZE)).ui(ui);
-                        egui::Slider::new(&mut self.window_modification_cache.x, -8192..=8192)
-                            .logarithmic(true)
-                            .drag_value_speed(1.0)
-                            .ui(ui);
-                        egui::Label::new(egui::RichText::new("y: ").size(Self::FONT_SIZE)).ui(ui);
-                        egui::Slider::new(&mut self.window_modification_cache.y, -8192..=8192)
-                            .logarithmic(true)
-                            .drag_value_speed(1.0)
-                            .ui(ui);
-                    });
+                    self.modify_window_position(ui);
+                    ui.end_row();
+                    self.modify_window_fullscreen_status(ui);
                     ui.end_row();
                 });
             ui.add_space(10.0);
+        });
+    }
+
+    fn modify_window_size(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_centered(|ui| {
+            egui::Label::new(egui::RichText::new("窗口大小: ").size(Self::FONT_SIZE))
+                .selectable(false)
+                .ui(ui);
+            egui::Button::new(egui::RichText::new("读取").size(Self::FONT_SIZE))
+                .ui(ui)
+                .clicked()
+                .then(|| {
+                    self.update_current_window_info();
+                    self.current_window_info_index.as_ref().map(|&index| {
+                        self.window_modifier
+                            .window_info_list()
+                            .get(index)
+                            .unwrap()
+                            .get_size()
+                            .map(|[width, height]| {
+                                self.window_modification_cache.width = width;
+                                self.window_modification_cache.height = height;
+                            })
+                            .map_err(|err| message_dialog::warning(&err.to_string()).show())
+                    });
+                });
+            egui::Button::new(egui::RichText::new("应用").size(Self::FONT_SIZE))
+                .ui(ui)
+                .clicked()
+                .then(|| {
+                    self.update_current_window_info();
+                    self.current_window_info().map(|window_info| {
+                        window_info
+                            .resize([
+                                self.window_modification_cache.width,
+                                self.window_modification_cache.height,
+                            ])
+                            .map_err(|err| message_dialog::warning(&err.to_string()).show())
+                    });
+                });
+            egui::Label::new(egui::RichText::new("宽度: ").size(Self::FONT_SIZE)).ui(ui);
+            egui::Slider::new(&mut self.window_modification_cache.width, 0..=8192)
+                .logarithmic(true)
+                .drag_value_speed(1.0)
+                .ui(ui);
+            egui::Label::new(egui::RichText::new("高度: ").size(Self::FONT_SIZE)).ui(ui);
+            egui::Slider::new(&mut self.window_modification_cache.height, 0..=8192)
+                .logarithmic(true)
+                .drag_value_speed(1.0)
+                .ui(ui);
+        });
+    }
+
+    fn modify_window_inner_size(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_centered(|ui| {
+            egui::Label::new(egui::RichText::new("窗口内部大小: ").size(Self::FONT_SIZE)).ui(ui);
+            egui::Button::new(egui::RichText::new("读取").size(Self::FONT_SIZE))
+                .ui(ui)
+                .clicked()
+                .then(|| {
+                    self.update_current_window_info();
+                    self.current_window_info()
+                        .map(|window_info| window_info.get_inner_size())
+                        .map(|inner_size| {
+                            inner_size
+                                .map(|[inner_width, inner_height]| {
+                                    self.window_modification_cache.inner_width = inner_width;
+                                    self.window_modification_cache.inner_height = inner_height;
+                                })
+                                .map_err(|err| message_dialog::warning(&err.to_string()).show())
+                        });
+                });
+            egui::Button::new(egui::RichText::new("应用").size(Self::FONT_SIZE))
+                .ui(ui)
+                .clicked()
+                .then(|| {
+                    self.update_current_window_info();
+                    self.current_window_info().map(|window_info| {
+                        window_info
+                            .resize_inner([
+                                self.window_modification_cache.inner_width,
+                                self.window_modification_cache.inner_height,
+                            ])
+                            .map_err(|err| message_dialog::warning(&err.to_string()).show())
+                    });
+                });
+            egui::Label::new(egui::RichText::new("宽度: ").size(Self::FONT_SIZE)).ui(ui);
+            egui::Slider::new(&mut self.window_modification_cache.inner_width, 0..=8192)
+                .logarithmic(true)
+                .drag_value_speed(1.0)
+                .ui(ui);
+            egui::Label::new(egui::RichText::new("高度: ").size(Self::FONT_SIZE)).ui(ui);
+            egui::Slider::new(&mut self.window_modification_cache.inner_height, 0..=8192)
+                .logarithmic(true)
+                .drag_value_speed(1.0)
+                .ui(ui);
+        });
+    }
+
+    fn modify_window_position(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_centered(|ui| {
+            egui::Label::new(egui::RichText::new("窗口位置: ").size(Self::FONT_SIZE)).ui(ui);
+            egui::Button::new(egui::RichText::new("读取").size(Self::FONT_SIZE))
+                .ui(ui)
+                .clicked()
+                .then(|| {
+                    self.update_current_window_info();
+                    self.current_window_info()
+                        .map(|window_info| window_info.get_position())
+                        .map(|position| {
+                            position
+                                .map(|[x, y]| {
+                                    self.window_modification_cache.x = x;
+                                    self.window_modification_cache.y = y;
+                                })
+                                .map_err(|err| message_dialog::warning(&err.to_string()).show())
+                        });
+                });
+            egui::Button::new(egui::RichText::new("应用").size(Self::FONT_SIZE))
+                .ui(ui)
+                .clicked()
+                .then(|| {
+                    self.update_current_window_info();
+                    self.current_window_info().map(|window_info| {
+                        window_info
+                            .move_to([
+                                self.window_modification_cache.x,
+                                self.window_modification_cache.y,
+                            ])
+                            .map_err(|err| message_dialog::warning(&err.to_string()).show())
+                    });
+                });
+            egui::Label::new(egui::RichText::new("x: ").size(Self::FONT_SIZE)).ui(ui);
+            egui::Slider::new(&mut self.window_modification_cache.x, -8192..=8192)
+                .logarithmic(true)
+                .drag_value_speed(1.0)
+                .ui(ui);
+            egui::Label::new(egui::RichText::new("y: ").size(Self::FONT_SIZE)).ui(ui);
+            egui::Slider::new(&mut self.window_modification_cache.y, -8192..=8192)
+                .logarithmic(true)
+                .drag_value_speed(1.0)
+                .ui(ui);
+        });
+    }
+
+    fn modify_window_fullscreen_status(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_centered(|ui| {
+            egui::Label::new(egui::RichText::new("窗口全屏设置: ").size(Self::FONT_SIZE)).ui(ui);
+            egui::Button::new(egui::RichText::new("强制无边框全屏").size(Self::FONT_SIZE))
+                .ui(ui)
+                .clicked()
+                .then(|| {
+                    self.update_current_window_info();
+                    self.current_window_info_mut().map(|window_info| {
+                        window_info
+                            .set_borderless_fullscreen()
+                            .map_err(|err| message_dialog::warning(&err.to_string()).show())
+                    });
+                });
+            egui::Button::new(egui::RichText::new("还原窗口化").size(Self::FONT_SIZE))
+                .ui(ui)
+                .clicked()
+                .then(|| {
+                    self.update_current_window_info();
+                    self.current_window_info_mut().map(|window_info| {
+                        window_info
+                            .restore_from_borderless_fullscreen()
+                            .map_err(|err| message_dialog::warning(&err.to_string()).show())
+                    });
+                });
         });
     }
 }

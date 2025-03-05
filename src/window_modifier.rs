@@ -2,6 +2,9 @@ use egui::Widget;
 use windows::{
     Win32::{
         Foundation::{CloseHandle, HWND, LPARAM},
+        Graphics::Gdi::{
+            GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+        },
         System::{
             ProcessStatus::GetModuleFileNameExW,
             Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ},
@@ -10,7 +13,8 @@ use windows::{
             AdjustWindowRectEx, EnumChildWindows, GWL_EXSTYLE, GWL_STYLE, GetClientRect, GetMenu,
             GetWindowLongPtrW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsWindow,
             IsWindowVisible, SWP_ASYNCWINDOWPOS, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-            SetWindowPos, WINDOW_EX_STYLE, WINDOW_STYLE,
+            SetWindowLongPtrW, SetWindowPos, WINDOW_EX_STYLE, WINDOW_STYLE, WS_EX_APPWINDOW,
+            WS_EX_WINDOWEDGE, WS_OVERLAPPEDWINDOW, WS_POPUP,
         },
     },
     core::BOOL,
@@ -34,6 +38,20 @@ impl WindowModifier {
     pub fn window_info_list(&self) -> &[WindowInfo] {
         &self.window_info_list
     }
+
+    pub fn window_info_list_mut(&mut self) -> &mut [WindowInfo] {
+        &mut self.window_info_list
+    }
+}
+
+#[derive(Debug, Clone)]
+struct WindowStatus {
+    width: i32,
+    height: i32,
+    x: i32,
+    y: i32,
+    style: WINDOW_STYLE,
+    ex_style: WINDOW_EX_STYLE,
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +60,7 @@ pub struct WindowInfo {
     pub hwnd: HWND,
     pub title: String,
     pub program_path: String,
+    borderless_fullscreen_storage: Option<Box<WindowStatus>>,
 }
 
 impl WindowInfo {
@@ -145,6 +164,70 @@ impl WindowInfo {
             )
         }
     }
+
+    pub fn set_borderless_fullscreen(&mut self) -> windows::core::Result<()> {
+        if self.borderless_fullscreen_storage.is_some() {
+            return Ok(());
+        }
+        let style = WINDOW_STYLE(unsafe { GetWindowLongPtrW(self.hwnd, GWL_STYLE) } as _);
+        let ex_style = WINDOW_EX_STYLE(unsafe { GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) } as _);
+        let window_rect = self.get_window_rect()?;
+        let width = window_rect.right - window_rect.left;
+        let height = window_rect.bottom - window_rect.top;
+        let x = window_rect.left;
+        let y = window_rect.top;
+        let borderless_fullscreen_storage = Box::new(WindowStatus {
+            width,
+            height,
+            x,
+            y,
+            style,
+            ex_style,
+        });
+        self.borderless_fullscreen_storage = Some(borderless_fullscreen_storage);
+        let hmonitor = unsafe { MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST) };
+        let mut monitor_info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        unsafe { GetMonitorInfoW(hmonitor, &raw mut monitor_info) }.ok()?;
+        let monitor_rect = monitor_info.rcMonitor;
+        let monitor_width = monitor_rect.right - monitor_rect.left;
+        let monitor_height = monitor_rect.bottom - monitor_rect.top;
+        unsafe {
+            SetWindowLongPtrW(
+                self.hwnd,
+                GWL_STYLE,
+                ((style & !WS_OVERLAPPEDWINDOW) | WS_POPUP).0 as _,
+            );
+            SetWindowLongPtrW(
+                self.hwnd,
+                GWL_EXSTYLE,
+                (ex_style & !(WS_EX_APPWINDOW | WS_EX_WINDOWEDGE)).0 as _,
+            );
+        }
+        self.resize([monitor_width, monitor_height])?;
+        self.move_to([0, 0])
+    }
+
+    pub fn restore_from_borderless_fullscreen(&mut self) -> windows::core::Result<()> {
+        if self.borderless_fullscreen_storage.is_none() {
+            return Ok(());
+        }
+        let borderless_fullscreen_storage = self.borderless_fullscreen_storage.take().unwrap();
+        let WindowStatus {
+            width,
+            height,
+            x,
+            y,
+            style,
+            ex_style,
+        } = *borderless_fullscreen_storage;
+        unsafe { SetWindowLongPtrW(self.hwnd, GWL_STYLE, style.0 as _) };
+        unsafe { SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, ex_style.0 as _) };
+        self.resize([width, height])?;
+        self.move_to([x, y])
+    }
 }
 
 impl WindowInfo {
@@ -184,6 +267,18 @@ impl WindowInfo {
                         .selectable(true)
                         .ui(ui);
                         ui.end_row();
+                        let state_text = if self.borderless_fullscreen_storage.is_some() {
+                            "是"
+                        } else {
+                            "否"
+                        };
+                        egui::Label::new(
+                            egui::RichText::new(format!("强制无边框全屏状态: {}", state_text))
+                                .size(FONT_SIZE),
+                        )
+                        .selectable(true)
+                        .ui(ui);
+                        ui.end_row();
                     })
             });
     }
@@ -218,6 +313,13 @@ fn enumerate_windows(window_info_list: &mut Vec<WindowInfo>) {
         if pid == 0 {
             return DEFAULT_RETURN_VALUE;
         }
+        let window_info_list = unsafe { &mut *(lparam.0 as *mut Vec<WindowInfo>) };
+        if window_info_list
+            .iter()
+            .any(|window_info| window_info.pid == pid && window_info.hwnd == hwnd)
+        {
+            return DEFAULT_RETURN_VALUE;
+        }
         let title = {
             let mut title_buf = [0u16; 1024];
             let title_length = unsafe { GetWindowTextW(hwnd, &mut title_buf) };
@@ -242,17 +344,18 @@ fn enumerate_windows(window_info_list: &mut Vec<WindowInfo>) {
             unsafe { CloseHandle(process_handle) }.unwrap();
             String::from_utf16_lossy(&program_path_buf[..program_path_length as usize])
         };
-        let window_info_list = unsafe { &mut *(lparam.0 as *mut Vec<WindowInfo>) };
         window_info_list.push(WindowInfo {
             pid,
             hwnd,
             title,
             program_path,
+            borderless_fullscreen_storage: None,
         });
         DEFAULT_RETURN_VALUE
     }
 
-    window_info_list.clear();
+    window_info_list.retain(|window_info| window_info.is_valid());
+
     let _ = unsafe {
         EnumChildWindows(
             None,
