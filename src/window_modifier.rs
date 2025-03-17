@@ -11,10 +11,11 @@ use windows::{
         },
         UI::WindowsAndMessaging::{
             AdjustWindowRectEx, EnumChildWindows, GWL_EXSTYLE, GWL_STYLE, GetClientRect, GetMenu,
-            GetWindowLongPtrW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsWindow,
-            IsWindowVisible, SWP_ASYNCWINDOWPOS, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-            SetWindowLongPtrW, SetWindowPos, WINDOW_EX_STYLE, WINDOW_STYLE, WS_EX_APPWINDOW,
-            WS_EX_WINDOWEDGE, WS_OVERLAPPEDWINDOW, WS_POPUP,
+            GetWindowLongPtrW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
+            HWND_NOTOPMOST, HWND_TOPMOST, IsWindow, IsWindowVisible, SWP_ASYNCWINDOWPOS,
+            SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos, WINDOW_EX_STYLE,
+            WINDOW_STYLE, WS_EX_APPWINDOW, WS_EX_WINDOWEDGE, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
+            WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME,
         },
     },
     core::BOOL,
@@ -163,6 +164,54 @@ impl WindowInfo {
                 SWP_ASYNCWINDOWPOS | SWP_NOZORDER | SWP_NOSIZE,
             )
         }
+    }
+
+    pub fn set_top_most(&self, top_most: bool) -> windows::core::Result<()> {
+        unsafe {
+            SetWindowPos(
+                self.hwnd,
+                Some(if top_most {
+                    HWND_TOPMOST
+                } else {
+                    HWND_NOTOPMOST
+                }),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_ASYNCWINDOWPOS,
+            )
+        }
+    }
+
+    pub fn set_maximizable(&self, maximizable: bool) {
+        let style = WINDOW_STYLE(unsafe { GetWindowLongPtrW(self.hwnd, GWL_STYLE) } as _);
+        let new_style = if maximizable {
+            style | WS_MAXIMIZEBOX
+        } else {
+            style & !WS_MAXIMIZEBOX
+        };
+        unsafe { SetWindowLongPtrW(self.hwnd, GWL_STYLE, new_style.0 as _) };
+    }
+
+    pub fn set_minimizable(&self, maximizable: bool) {
+        let style = WINDOW_STYLE(unsafe { GetWindowLongPtrW(self.hwnd, GWL_STYLE) } as _);
+        let new_style = if maximizable {
+            style | WS_MINIMIZEBOX
+        } else {
+            style & !WS_MINIMIZEBOX
+        };
+        unsafe { SetWindowLongPtrW(self.hwnd, GWL_STYLE, new_style.0 as _) };
+    }
+
+    pub fn set_resizable(&self, resizable: bool) {
+        let style = WINDOW_STYLE(unsafe { GetWindowLongPtrW(self.hwnd, GWL_STYLE) } as _);
+        let new_style = if resizable {
+            style | WS_THICKFRAME
+        } else {
+            style & !WS_THICKFRAME
+        };
+        unsafe { SetWindowLongPtrW(self.hwnd, GWL_STYLE, new_style.0 as _) };
     }
 
     pub fn set_borderless_fullscreen(&mut self) -> windows::core::Result<()> {

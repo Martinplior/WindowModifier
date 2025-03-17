@@ -4,7 +4,7 @@ use eframe::Renderer;
 use egui::{ThemePreference, ViewportBuilder, Widget};
 
 use crate::{
-    message_dialog,
+    message_dialog, utils,
     window_modifier::{WindowInfo, WindowModifier},
 };
 
@@ -86,8 +86,6 @@ impl eframe::App for App {
 }
 
 impl App {
-    pub const FONT_SIZE: f32 = 16.0;
-
     fn current_window_info(&self) -> Option<&WindowInfo> {
         self.current_window_info_index
             .as_ref()
@@ -118,13 +116,13 @@ impl App {
         ui.vertical(|ui| {
             egui::ScrollArea::horizontal().show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    egui::Label::new(egui::RichText::new("当前窗口: ").size(Self::FONT_SIZE))
+                    egui::Label::new(Self::egui_text("当前窗口: "))
                         .selectable(true)
                         .ui(ui);
                     self.current_window_info()
                         .map(|window_info| window_info.show_ui(ui))
                         .unwrap_or_else(|| {
-                            egui::Label::new(egui::RichText::new("无").size(Self::FONT_SIZE))
+                            egui::Label::new(Self::egui_text("无"))
                                 .selectable(true)
                                 .ui(ui);
                         });
@@ -133,7 +131,7 @@ impl App {
             });
         });
         ui.separator();
-        egui::Button::new(egui::RichText::new("刷新窗口列表").size(Self::FONT_SIZE))
+        egui::Button::new(Self::egui_text("刷新窗口列表"))
             .ui(ui)
             .clicked()
             .then(|| {
@@ -185,6 +183,12 @@ impl App {
                     ui.end_row();
                     self.modify_window_position(ui);
                     ui.end_row();
+                    self.modify_window_top_most(ui);
+                    ui.end_row();
+                    self.modify_window_resizable(ui);
+                    ui.end_row();
+                    self.modify_window_maximizable_and_minimizable(ui);
+                    ui.end_row();
                     self.modify_window_fullscreen_status(ui);
                     ui.end_row();
                 });
@@ -194,10 +198,10 @@ impl App {
 
     fn modify_window_size(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_centered(|ui| {
-            egui::Label::new(egui::RichText::new("窗口大小: ").size(Self::FONT_SIZE))
+            egui::Label::new(Self::egui_text("窗口大小: "))
                 .selectable(false)
                 .ui(ui);
-            egui::Button::new(egui::RichText::new("读取").size(Self::FONT_SIZE))
+            egui::Button::new(Self::egui_text("读取"))
                 .ui(ui)
                 .clicked()
                 .then(|| {
@@ -215,7 +219,7 @@ impl App {
                             .map_err(|err| message_dialog::warning(&err.to_string()).show())
                     });
                 });
-            egui::Button::new(egui::RichText::new("应用").size(Self::FONT_SIZE))
+            egui::Button::new(Self::egui_text("应用"))
                 .ui(ui)
                 .clicked()
                 .then(|| {
@@ -229,23 +233,30 @@ impl App {
                             .map_err(|err| message_dialog::warning(&err.to_string()).show())
                     });
                 });
-            egui::Label::new(egui::RichText::new("宽度: ").size(Self::FONT_SIZE)).ui(ui);
+            egui::Label::new(Self::egui_text("宽度: ")).ui(ui);
             egui::Slider::new(&mut self.window_modification_cache.width, 0..=8192)
                 .logarithmic(true)
                 .drag_value_speed(1.0)
                 .ui(ui);
-            egui::Label::new(egui::RichText::new("高度: ").size(Self::FONT_SIZE)).ui(ui);
+            egui::Label::new(Self::egui_text("高度: ")).ui(ui);
             egui::Slider::new(&mut self.window_modification_cache.height, 0..=8192)
                 .logarithmic(true)
                 .drag_value_speed(1.0)
                 .ui(ui);
+            ui.separator();
+            egui::Label::new(Self::egui_text("当前比例: ")).ui(ui);
+            egui::Label::new(Self::egui_text(Self::size_to_ratio_string([
+                self.window_modification_cache.width,
+                self.window_modification_cache.height,
+            ])))
+            .ui(ui);
         });
     }
 
     fn modify_window_inner_size(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_centered(|ui| {
-            egui::Label::new(egui::RichText::new("窗口内部大小: ").size(Self::FONT_SIZE)).ui(ui);
-            egui::Button::new(egui::RichText::new("读取").size(Self::FONT_SIZE))
+            egui::Label::new(Self::egui_text("窗口内部大小: ")).ui(ui);
+            egui::Button::new(Self::egui_text("读取"))
                 .ui(ui)
                 .clicked()
                 .then(|| {
@@ -261,7 +272,7 @@ impl App {
                                 .map_err(|err| message_dialog::warning(&err.to_string()).show())
                         });
                 });
-            egui::Button::new(egui::RichText::new("应用").size(Self::FONT_SIZE))
+            egui::Button::new(Self::egui_text("应用"))
                 .ui(ui)
                 .clicked()
                 .then(|| {
@@ -275,23 +286,30 @@ impl App {
                             .map_err(|err| message_dialog::warning(&err.to_string()).show())
                     });
                 });
-            egui::Label::new(egui::RichText::new("宽度: ").size(Self::FONT_SIZE)).ui(ui);
+            egui::Label::new(Self::egui_text("宽度: ")).ui(ui);
             egui::Slider::new(&mut self.window_modification_cache.inner_width, 0..=8192)
                 .logarithmic(true)
                 .drag_value_speed(1.0)
                 .ui(ui);
-            egui::Label::new(egui::RichText::new("高度: ").size(Self::FONT_SIZE)).ui(ui);
+            egui::Label::new(Self::egui_text("高度: ")).ui(ui);
             egui::Slider::new(&mut self.window_modification_cache.inner_height, 0..=8192)
                 .logarithmic(true)
                 .drag_value_speed(1.0)
                 .ui(ui);
+            ui.separator();
+            egui::Label::new(Self::egui_text("当前比例: ")).ui(ui);
+            egui::Label::new(Self::egui_text(Self::size_to_ratio_string([
+                self.window_modification_cache.inner_width,
+                self.window_modification_cache.inner_height,
+            ])))
+            .ui(ui);
         });
     }
 
     fn modify_window_position(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_centered(|ui| {
-            egui::Label::new(egui::RichText::new("窗口位置: ").size(Self::FONT_SIZE)).ui(ui);
-            egui::Button::new(egui::RichText::new("读取").size(Self::FONT_SIZE))
+            egui::Label::new(Self::egui_text("窗口位置: ")).ui(ui);
+            egui::Button::new(Self::egui_text("读取"))
                 .ui(ui)
                 .clicked()
                 .then(|| {
@@ -307,7 +325,7 @@ impl App {
                                 .map_err(|err| message_dialog::warning(&err.to_string()).show())
                         });
                 });
-            egui::Button::new(egui::RichText::new("应用").size(Self::FONT_SIZE))
+            egui::Button::new(Self::egui_text("应用"))
                 .ui(ui)
                 .clicked()
                 .then(|| {
@@ -321,12 +339,12 @@ impl App {
                             .map_err(|err| message_dialog::warning(&err.to_string()).show())
                     });
                 });
-            egui::Label::new(egui::RichText::new("x: ").size(Self::FONT_SIZE)).ui(ui);
+            egui::Label::new(Self::egui_text("x: ")).ui(ui);
             egui::Slider::new(&mut self.window_modification_cache.x, -8192..=8192)
                 .logarithmic(true)
                 .drag_value_speed(1.0)
                 .ui(ui);
-            egui::Label::new(egui::RichText::new("y: ").size(Self::FONT_SIZE)).ui(ui);
+            egui::Label::new(Self::egui_text("y: ")).ui(ui);
             egui::Slider::new(&mut self.window_modification_cache.y, -8192..=8192)
                 .logarithmic(true)
                 .drag_value_speed(1.0)
@@ -334,10 +352,101 @@ impl App {
         });
     }
 
+    fn modify_window_top_most(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_centered(|ui| {
+            egui::Label::new(Self::egui_text("窗口置顶设置: ")).ui(ui);
+            egui::Button::new(Self::egui_text("启用"))
+                .ui(ui)
+                .clicked()
+                .then(|| {
+                    self.update_current_window_info();
+                    self.current_window_info_mut().map(|window_info| {
+                        window_info
+                            .set_top_most(true)
+                            .map_err(|err| message_dialog::warning(&err.to_string()).show())
+                    });
+                });
+            egui::Button::new(Self::egui_text("禁用"))
+                .ui(ui)
+                .clicked()
+                .then(|| {
+                    self.update_current_window_info();
+                    self.current_window_info_mut().map(|window_info| {
+                        window_info
+                            .set_top_most(false)
+                            .map_err(|err| message_dialog::warning(&err.to_string()).show())
+                    });
+                });
+        });
+    }
+
+    fn modify_window_maximizable_and_minimizable(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_centered(|ui| {
+            egui::Label::new(Self::egui_text("窗口最大化/最小化设置: ")).ui(ui);
+            egui::Label::new(Self::egui_text("最大化: ")).ui(ui);
+            egui::Button::new(Self::egui_text("启用"))
+                .ui(ui)
+                .clicked()
+                .then(|| {
+                    self.update_current_window_info();
+                    self.current_window_info_mut()
+                        .map(|window_info| window_info.set_maximizable(true));
+                });
+            egui::Button::new(Self::egui_text("禁用"))
+                .ui(ui)
+                .clicked()
+                .then(|| {
+                    self.update_current_window_info();
+                    self.current_window_info_mut()
+                        .map(|window_info| window_info.set_maximizable(false));
+                });
+            ui.separator();
+            egui::Label::new(Self::egui_text("最小化: ")).ui(ui);
+            egui::Button::new(Self::egui_text("启用"))
+                .ui(ui)
+                .clicked()
+                .then(|| {
+                    self.update_current_window_info();
+                    self.current_window_info_mut()
+                        .map(|window_info| window_info.set_minimizable(true));
+                });
+            egui::Button::new(Self::egui_text("禁用"))
+                .ui(ui)
+                .clicked()
+                .then(|| {
+                    self.update_current_window_info();
+                    self.current_window_info_mut()
+                        .map(|window_info| window_info.set_minimizable(false));
+                });
+        });
+    }
+
+    fn modify_window_resizable(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_centered(|ui| {
+            egui::Label::new(Self::egui_text("窗口边框拖拽设置: ")).ui(ui);
+            egui::Button::new(Self::egui_text("启用"))
+                .ui(ui)
+                .clicked()
+                .then(|| {
+                    self.update_current_window_info();
+                    self.current_window_info_mut()
+                        .map(|window_info| window_info.set_resizable(true));
+                });
+            egui::Button::new(Self::egui_text("禁用"))
+                .ui(ui)
+                .clicked()
+                .then(|| {
+                    self.update_current_window_info();
+                    self.current_window_info_mut()
+                        .map(|window_info| window_info.set_resizable(false));
+                });
+        });
+    }
+
     fn modify_window_fullscreen_status(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_centered(|ui| {
-            egui::Label::new(egui::RichText::new("窗口全屏设置: ").size(Self::FONT_SIZE)).ui(ui);
-            egui::Button::new(egui::RichText::new("强制无边框全屏").size(Self::FONT_SIZE))
+            egui::Label::new(Self::egui_text("窗口全屏设置: ")).ui(ui);
+            egui::Button::new(Self::egui_text("强制无边框全屏"))
                 .ui(ui)
                 .clicked()
                 .then(|| {
@@ -348,7 +457,7 @@ impl App {
                             .map_err(|err| message_dialog::warning(&err.to_string()).show())
                     });
                 });
-            egui::Button::new(egui::RichText::new("还原窗口化").size(Self::FONT_SIZE))
+            egui::Button::new(Self::egui_text("还原窗口化"))
                 .ui(ui)
                 .clicked()
                 .then(|| {
@@ -360,5 +469,23 @@ impl App {
                     });
                 });
         });
+    }
+}
+
+impl App {
+    pub const FONT_SIZE: f32 = 16.0;
+
+    fn egui_text(text: impl Into<String>) -> egui::RichText {
+        egui::RichText::new(text).size(Self::FONT_SIZE)
+    }
+
+    fn size_to_ratio_string(size: [i32; 2]) -> String {
+        let [width, height] = size;
+        if width == 0 || height == 0 {
+            format!("{}:{}", width, height)
+        } else {
+            let gcd = utils::gcd(width, height);
+            format!("{}:{}", width / gcd, height / gcd)
+        }
     }
 }

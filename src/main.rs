@@ -7,6 +7,7 @@ use app::MainApp;
 mod app;
 
 mod message_dialog;
+mod utils;
 mod window_modifier;
 
 fn graceful_run<R>(
