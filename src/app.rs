@@ -21,7 +21,7 @@ impl MainApp {
         let native_options = eframe::NativeOptions {
             viewport: ViewportBuilder::default()
                 .with_min_inner_size([600.0, 600.0])
-                .with_inner_size([1280.0, 720.0]),
+                .with_inner_size([1380.0, 720.0]),
             renderer: Renderer::Wgpu,
             ..Default::default()
         };
@@ -48,6 +48,8 @@ pub(crate) struct App {
     window_modifier: WindowModifier,
     current_window_info_index: Option<usize>,
     window_modification_cache: WindowModificationCache,
+
+    realtime_update_window_position: bool,
 }
 
 impl App {
@@ -69,6 +71,7 @@ impl App {
             window_modifier: WindowModifier::new(),
             current_window_info_index: None,
             window_modification_cache: Default::default(),
+            realtime_update_window_position: false,
         }
     }
 }
@@ -177,6 +180,8 @@ impl App {
                 .num_columns(1)
                 .striped(true)
                 .show(ui, |ui| {
+                    self.modify_window_status_storage(ui);
+                    ui.end_row();
                     self.modify_window_size(ui);
                     ui.end_row();
                     self.modify_window_inner_size(ui);
@@ -191,8 +196,45 @@ impl App {
                     ui.end_row();
                     self.modify_window_fullscreen_status(ui);
                     ui.end_row();
+                    self.modify_window_border(ui);
+                    ui.end_row();
                 });
             ui.add_space(10.0);
+        });
+    }
+
+    fn hover_text(text: impl Into<String>) -> egui::RichText {
+        egui::RichText::new(text).size(14.0)
+    }
+
+    fn modify_window_status_storage(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_centered(|ui| {
+            egui::Label::new(Self::egui_text("窗口状态存储: "))
+                .selectable(false)
+                .ui(ui)
+                .on_hover_text(Self::hover_text("在修改窗口前保存当前状态总是不错的选择"));
+            egui::Button::new(Self::egui_text("保存"))
+                .ui(ui)
+                .clicked()
+                .then(|| {
+                    self.update_current_window_info();
+                    self.current_window_info_mut().map(|window_info| {
+                        window_info
+                            .store_window_status()
+                            .map_err(|err| message_dialog::warning(&err.to_string()).show())
+                    });
+                });
+            egui::Button::new(Self::egui_text("加载"))
+                .ui(ui)
+                .clicked()
+                .then(|| {
+                    self.update_current_window_info();
+                    self.current_window_info_mut().map(|window_info| {
+                        window_info
+                            .load_window_status()
+                            .map_err(|err| message_dialog::warning(&err.to_string()).show())
+                    });
+                });
         });
     }
 
@@ -200,7 +242,8 @@ impl App {
         ui.horizontal_centered(|ui| {
             egui::Label::new(Self::egui_text("窗口大小: "))
                 .selectable(false)
-                .ui(ui);
+                .ui(ui)
+                .on_hover_text(Self::hover_text("整个窗口的大小，包括边框和标题栏。"));
             egui::Button::new(Self::egui_text("读取"))
                 .ui(ui)
                 .clicked()
@@ -255,7 +298,13 @@ impl App {
 
     fn modify_window_inner_size(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_centered(|ui| {
-            egui::Label::new(Self::egui_text("窗口内部大小: ")).ui(ui);
+            egui::Label::new(Self::egui_text("窗口内部大小: "))
+                .selectable(false)
+                .ui(ui)
+                .on_hover_text(Self::hover_text(concat!(
+                    "窗口内部画面的大小，如游戏窗口的游戏画面。\n",
+                    "对于有着复杂边框的窗口，它并不总是正确的。"
+                )));
             egui::Button::new(Self::egui_text("读取"))
                 .ui(ui)
                 .clicked()
@@ -308,7 +357,17 @@ impl App {
 
     fn modify_window_position(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_centered(|ui| {
-            egui::Label::new(Self::egui_text("窗口位置: ")).ui(ui);
+            egui::Label::new(Self::egui_text("窗口位置: "))
+                .selectable(false)
+                .ui(ui)
+                .on_hover_text(Self::hover_text("窗口左上角的坐标"));
+            egui::Checkbox::new(
+                &mut self.realtime_update_window_position,
+                Self::egui_text("实时修改"),
+            )
+            .ui(ui)
+            .on_hover_text(Self::hover_text("启用后，任何的修改都会被立即应用"));
+            ui.separator();
             egui::Button::new(Self::egui_text("读取"))
                 .ui(ui)
                 .clicked()
@@ -340,21 +399,37 @@ impl App {
                     });
                 });
             egui::Label::new(Self::egui_text("x: ")).ui(ui);
-            egui::Slider::new(&mut self.window_modification_cache.x, -8192..=8192)
+            let changed_x = egui::Slider::new(&mut self.window_modification_cache.x, -8192..=8192)
                 .logarithmic(true)
                 .drag_value_speed(1.0)
-                .ui(ui);
+                .ui(ui)
+                .changed();
             egui::Label::new(Self::egui_text("y: ")).ui(ui);
-            egui::Slider::new(&mut self.window_modification_cache.y, -8192..=8192)
+            let changed_y = egui::Slider::new(&mut self.window_modification_cache.y, -8192..=8192)
                 .logarithmic(true)
                 .drag_value_speed(1.0)
-                .ui(ui);
+                .ui(ui)
+                .changed();
+            if self.realtime_update_window_position && (changed_x || changed_y) {
+                self.update_current_window_info();
+                self.current_window_info().map(|window_info| {
+                    window_info
+                        .move_to([
+                            self.window_modification_cache.x,
+                            self.window_modification_cache.y,
+                        ])
+                        .map_err(|err| message_dialog::warning(&err.to_string()).show())
+                });
+            }
         });
     }
 
     fn modify_window_top_most(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_centered(|ui| {
-            egui::Label::new(Self::egui_text("窗口置顶设置: ")).ui(ui);
+            egui::Label::new(Self::egui_text("窗口置顶设置: "))
+                .selectable(false)
+                .ui(ui)
+                .on_hover_text(Self::hover_text("把窗口“钉”起来"));
             egui::Button::new(Self::egui_text("启用"))
                 .ui(ui)
                 .clicked()
@@ -382,7 +457,9 @@ impl App {
 
     fn modify_window_maximizable_and_minimizable(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_centered(|ui| {
-            egui::Label::new(Self::egui_text("窗口最大化/最小化设置: ")).ui(ui);
+            egui::Label::new(Self::egui_text("窗口最大化/最小化设置: "))
+                .selectable(false)
+                .ui(ui);
             egui::Label::new(Self::egui_text("最大化: ")).ui(ui);
             egui::Button::new(Self::egui_text("启用"))
                 .ui(ui)
@@ -423,7 +500,10 @@ impl App {
 
     fn modify_window_resizable(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_centered(|ui| {
-            egui::Label::new(Self::egui_text("窗口边框拖拽设置: ")).ui(ui);
+            egui::Label::new(Self::egui_text("窗口边框拖拽设置: "))
+                .selectable(false)
+                .ui(ui)
+                .on_hover_text(Self::hover_text("使窗口可以通过拖拽边框来改变大小"));
             egui::Button::new(Self::egui_text("启用"))
                 .ui(ui)
                 .clicked()
@@ -445,8 +525,10 @@ impl App {
 
     fn modify_window_fullscreen_status(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_centered(|ui| {
-            egui::Label::new(Self::egui_text("窗口全屏设置: ")).ui(ui);
-            egui::Button::new(Self::egui_text("强制无边框全屏"))
+            egui::Label::new(Self::egui_text("窗口全屏设置: "))
+                .selectable(false)
+                .ui(ui);
+            egui::Button::new(Self::egui_text("无边框全屏"))
                 .ui(ui)
                 .clicked()
                 .then(|| {
@@ -457,16 +539,40 @@ impl App {
                             .map_err(|err| message_dialog::warning(&err.to_string()).show())
                     });
                 });
-            egui::Button::new(Self::egui_text("还原窗口化"))
+        });
+    }
+
+    fn modify_window_border(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_centered(|ui| {
+            egui::Label::new(Self::egui_text("窗口边框设置: "))
+                .selectable(false)
+                .ui(ui);
+            egui::Button::new(Self::egui_text("移除边框"))
                 .ui(ui)
+                .on_hover_text(Self::hover_text("边框一去不复返..."))
                 .clicked()
                 .then(|| {
                     self.update_current_window_info();
                     self.current_window_info_mut().map(|window_info| {
                         window_info
-                            .restore_from_borderless_fullscreen()
+                            .set_borderless()
                             .map_err(|err| message_dialog::warning(&err.to_string()).show())
                     });
+                });
+            egui::Button::new(Self::egui_text("添加默认边框"))
+                .ui(ui)
+                .on_hover_text(Self::hover_text(concat!(
+                    "你应当优先选择加载先前存储的窗口状态。\n",
+                    "不过，总好过没有吧..."
+                )))
+                .clicked()
+                .then(|| {
+                    self.update_current_window_info();
+                    self.current_window_info_mut().map(|window_info| {
+                        window_info
+                            .set_border()
+                            .map_err(|err| message_dialog::warning(&err.to_string()).show())
+                    })
                 });
         });
     }

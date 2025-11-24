@@ -13,9 +13,9 @@ use windows::{
             AdjustWindowRectEx, EnumChildWindows, GWL_EXSTYLE, GWL_STYLE, GetClientRect, GetMenu,
             GetWindowLongPtrW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
             HWND_NOTOPMOST, HWND_TOPMOST, IsWindow, IsWindowVisible, SWP_ASYNCWINDOWPOS,
-            SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos, WINDOW_EX_STYLE,
-            WINDOW_STYLE, WS_EX_APPWINDOW, WS_EX_WINDOWEDGE, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
-            WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME,
+            SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW,
+            SetWindowPos, WINDOW_EX_STYLE, WINDOW_STYLE, WS_EX_APPWINDOW, WS_EX_WINDOWEDGE,
+            WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME,
         },
     },
     core::BOOL,
@@ -61,7 +61,7 @@ pub struct WindowInfo {
     pub hwnd: HWND,
     pub title: String,
     pub program_path: String,
-    borderless_fullscreen_storage: Option<Box<WindowStatus>>,
+    window_status_storage: Option<Box<WindowStatus>>,
 }
 
 impl WindowInfo {
@@ -179,7 +179,7 @@ impl WindowInfo {
                 0,
                 0,
                 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_ASYNCWINDOWPOS,
+                SWP_ASYNCWINDOWPOS | SWP_NOMOVE | SWP_NOSIZE,
             )
         }
     }
@@ -214,10 +214,7 @@ impl WindowInfo {
         unsafe { SetWindowLongPtrW(self.hwnd, GWL_STYLE, new_style.0 as _) };
     }
 
-    pub fn set_borderless_fullscreen(&mut self) -> windows::core::Result<()> {
-        if self.borderless_fullscreen_storage.is_some() {
-            return Ok(());
-        }
+    pub fn store_window_status(&mut self) -> windows::core::Result<()> {
         let style = WINDOW_STYLE(unsafe { GetWindowLongPtrW(self.hwnd, GWL_STYLE) } as _);
         let ex_style = WINDOW_EX_STYLE(unsafe { GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) } as _);
         let window_rect = self.get_window_rect()?;
@@ -225,7 +222,7 @@ impl WindowInfo {
         let height = window_rect.bottom - window_rect.top;
         let x = window_rect.left;
         let y = window_rect.top;
-        let borderless_fullscreen_storage = Box::new(WindowStatus {
+        let window_status_storage = Box::new(WindowStatus {
             width,
             height,
             x,
@@ -233,7 +230,33 @@ impl WindowInfo {
             style,
             ex_style,
         });
-        self.borderless_fullscreen_storage = Some(borderless_fullscreen_storage);
+        self.window_status_storage = Some(window_status_storage);
+        Ok(())
+    }
+
+    pub fn load_window_status(&mut self) -> windows::core::Result<()> {
+        if self.window_status_storage.is_none() {
+            return Ok(());
+        }
+        let window_status_storage = self.window_status_storage.clone().unwrap();
+        let WindowStatus {
+            width,
+            height,
+            x,
+            y,
+            style,
+            ex_style,
+        } = *window_status_storage;
+        unsafe { SetWindowLongPtrW(self.hwnd, GWL_STYLE, style.0 as _) };
+        unsafe { SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, ex_style.0 as _) };
+        self.resize([width, height])?;
+        self.move_to([x, y])?;
+        self.refresh_window()
+    }
+
+    pub fn set_borderless_fullscreen(&mut self) -> windows::core::Result<()> {
+        let style = WINDOW_STYLE(unsafe { GetWindowLongPtrW(self.hwnd, GWL_STYLE) } as _);
+        let ex_style = WINDOW_EX_STYLE(unsafe { GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) } as _);
         let hmonitor = unsafe { MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST) };
         let mut monitor_info = MONITORINFO {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
@@ -256,26 +279,67 @@ impl WindowInfo {
             );
         }
         self.resize([monitor_width, monitor_height])?;
-        self.move_to([0, 0])
+        self.move_to([0, 0])?;
+        self.refresh_window()
     }
 
-    pub fn restore_from_borderless_fullscreen(&mut self) -> windows::core::Result<()> {
-        if self.borderless_fullscreen_storage.is_none() {
-            return Ok(());
+    pub fn set_borderless(&self) -> windows::core::Result<()> {
+        let inner_size = self.get_inner_size()?;
+        let style = WINDOW_STYLE(unsafe { GetWindowLongPtrW(self.hwnd, GWL_STYLE) } as _);
+        let ex_style = WINDOW_EX_STYLE(unsafe { GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) } as _);
+        unsafe {
+            SetWindowLongPtrW(
+                self.hwnd,
+                GWL_STYLE,
+                ((style & !WS_OVERLAPPEDWINDOW) | WS_POPUP).0 as _,
+            );
+            SetWindowLongPtrW(
+                self.hwnd,
+                GWL_EXSTYLE,
+                (ex_style & !(WS_EX_APPWINDOW | WS_EX_WINDOWEDGE)).0 as _,
+            );
         }
-        let borderless_fullscreen_storage = self.borderless_fullscreen_storage.take().unwrap();
-        let WindowStatus {
-            width,
-            height,
-            x,
-            y,
-            style,
-            ex_style,
-        } = *borderless_fullscreen_storage;
-        unsafe { SetWindowLongPtrW(self.hwnd, GWL_STYLE, style.0 as _) };
-        unsafe { SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, ex_style.0 as _) };
-        self.resize([width, height])?;
-        self.move_to([x, y])
+        self.resize(inner_size)?;
+        self.refresh_window()
+    }
+
+    pub fn set_border(&self) -> windows::core::Result<()> {
+        let old_inner_size = self.get_inner_size()?;
+        let style = WINDOW_STYLE(unsafe { GetWindowLongPtrW(self.hwnd, GWL_STYLE) } as _);
+        let ex_style = WINDOW_EX_STYLE(unsafe { GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) } as _);
+        unsafe {
+            SetWindowLongPtrW(
+                self.hwnd,
+                GWL_STYLE,
+                ((style & !WS_POPUP) | WS_OVERLAPPEDWINDOW).0 as _,
+            );
+            SetWindowLongPtrW(
+                self.hwnd,
+                GWL_EXSTYLE,
+                (ex_style | WS_EX_APPWINDOW | WS_EX_WINDOWEDGE).0 as _,
+            );
+        }
+        self.refresh_window()?;
+        let new_inner_size = self.get_inner_size()?;
+        if new_inner_size != old_inner_size {
+            self.resize_inner(old_inner_size)?;
+        }
+        Ok(())
+    }
+
+    fn refresh_window(&self) -> windows::core::Result<()> {
+        const DUMMY: i32 = 0;
+        unsafe {
+            SetWindowPos(
+                self.hwnd,
+                None,
+                DUMMY,
+                DUMMY,
+                DUMMY,
+                DUMMY,
+                SWP_ASYNCWINDOWPOS | SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED,
+            )
+        }
     }
 }
 
@@ -316,13 +380,9 @@ impl WindowInfo {
                         .selectable(true)
                         .ui(ui);
                         ui.end_row();
-                        let state_text = if self.borderless_fullscreen_storage.is_some() {
-                            "是"
-                        } else {
-                            "否"
-                        };
+                        let state_text = format!("{:?}", self.window_status_storage);
                         egui::Label::new(
-                            egui::RichText::new(format!("强制无边框全屏状态: {}", state_text))
+                            egui::RichText::new(format!("当前存储的窗口状态: {}", state_text))
                                 .size(FONT_SIZE),
                         )
                         .selectable(true)
@@ -398,7 +458,7 @@ fn enumerate_windows(window_info_list: &mut Vec<WindowInfo>) {
             hwnd,
             title,
             program_path,
-            borderless_fullscreen_storage: None,
+            window_status_storage: None,
         });
         DEFAULT_RETURN_VALUE
     }
