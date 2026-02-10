@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use eframe::Renderer;
+use eframe::{
+    Renderer,
+    egui_wgpu::{WgpuConfiguration, WgpuSetup, WgpuSetupCreateNew},
+};
 use egui::{ThemePreference, ViewportBuilder, Widget};
 
 use crate::{
@@ -23,6 +26,20 @@ impl MainApp {
                 .with_min_inner_size([600.0, 600.0])
                 .with_inner_size([1380.0, 720.0]),
             renderer: Renderer::Wgpu,
+            wgpu_options: WgpuConfiguration {
+                wgpu_setup: WgpuSetup::CreateNew(WgpuSetupCreateNew {
+                    device_descriptor: Arc::new(|adaptor| {
+                        let default_descriptor =
+                            (WgpuSetupCreateNew::default().device_descriptor)(adaptor);
+                        wgpu::DeviceDescriptor {
+                            memory_hints: wgpu::MemoryHints::MemoryUsage,
+                            ..default_descriptor
+                        }
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
             ..Default::default()
         };
         eframe::run_native(
@@ -463,6 +480,7 @@ impl App {
             egui::Label::new(Self::egui_text("最大化: ")).ui(ui);
             egui::Button::new(Self::egui_text("启用"))
                 .ui(ui)
+                .on_hover_text(Self::hover_text("启用当前窗口的最大化按钮"))
                 .clicked()
                 .then(|| {
                     self.update_current_window_info();
@@ -471,6 +489,7 @@ impl App {
                 });
             egui::Button::new(Self::egui_text("禁用"))
                 .ui(ui)
+                .on_hover_text(Self::hover_text("禁用当前窗口的最大化按钮"))
                 .clicked()
                 .then(|| {
                     self.update_current_window_info();
@@ -481,6 +500,7 @@ impl App {
             egui::Label::new(Self::egui_text("最小化: ")).ui(ui);
             egui::Button::new(Self::egui_text("启用"))
                 .ui(ui)
+                .on_hover_text(Self::hover_text("启用当前窗口的最小化按钮"))
                 .clicked()
                 .then(|| {
                     self.update_current_window_info();
@@ -489,6 +509,7 @@ impl App {
                 });
             egui::Button::new(Self::egui_text("禁用"))
                 .ui(ui)
+                .on_hover_text(Self::hover_text("禁用当前窗口的最小化按钮"))
                 .clicked()
                 .then(|| {
                     self.update_current_window_info();

@@ -5,9 +5,9 @@ edition = "2024"
 
 [dependencies]
 wgpu = { version = "27.0.1", default-features = false, features = ["vulkan", "gles"] }
-eframe = { version = "0.33.2", default-features = false, features = ["wgpu"] }
-egui = { version = "0.33.2", default-features = false }
-rfd = { version = "0.15.4", default-features = false }
+eframe = { version = "0.33.3", default-features = false, features = ["wgpu"] }
+egui = { version = "0.33.3", default-features = false }
+rfd = { version = "0.17.2", default-features = false }
 windows = { version = "0.62.2", features = [
     "Win32_Graphics_Gdi",
     "Win32_Foundation",
